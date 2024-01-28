@@ -3,9 +3,12 @@ package org.mule.extension.jsonlogger.internal;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectWriter;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+
 import org.apache.commons.beanutils.BeanUtils;
 import org.apache.commons.beanutils.PropertyUtils;
+
 import org.joda.time.DateTime;
+
 import org.mule.extension.jsonlogger.api.pojos.LoggerProcessor;
 import org.mule.extension.jsonlogger.api.pojos.Priority;
 import org.mule.extension.jsonlogger.api.pojos.ScopeTracePoint;
@@ -13,6 +16,7 @@ import org.mule.extension.jsonlogger.internal.datamask.JsonMasker;
 import org.mule.extension.jsonlogger.internal.singleton.ConfigsSingleton;
 import org.mule.extension.jsonlogger.internal.singleton.LogEventSingleton;
 import org.mule.extension.jsonlogger.internal.singleton.ObjectMapperSingleton;
+
 import org.mule.runtime.api.component.location.ComponentLocation;
 import org.mule.runtime.api.meta.model.operation.ExecutionType;
 import org.mule.runtime.api.metadata.TypedValue;
@@ -33,8 +37,17 @@ import org.mule.runtime.extension.api.runtime.parameter.CorrelationInfo;
 import org.mule.runtime.extension.api.runtime.parameter.ParameterResolver;
 import org.mule.runtime.extension.api.runtime.process.CompletionCallback;
 import org.mule.runtime.extension.api.runtime.route.Chain;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import io.opentelemetry.api.OpenTelemetry;
+import io.opentelemetry.api.common.Attributes;
+import io.opentelemetry.api.metrics.LongHistogram;
+import io.opentelemetry.api.metrics.Meter;
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.api.trace.Tracer;
+import io.opentelemetry.context.Context;
 
 import javax.inject.Inject;
 import java.io.InputStream;
@@ -44,7 +57,8 @@ import static org.mule.runtime.api.meta.ExpressionSupport.NOT_SUPPORTED;
 import static org.mule.runtime.api.metadata.DataType.TEXT_STRING;
 
 /**
- * This class is a container for operations, every public method in this class will be taken as an extension operation.
+ * This class is a container for operations, every public method in this class
+ * will be taken as an extension operation.
  */
 public class JsonloggerOperations {
 
@@ -66,7 +80,8 @@ public class JsonloggerOperations {
     @Inject
     LogEventSingleton logEvent;
 
-    // Global definition of logger configs so that it's available for scope processor (SDK scope doesn't support passing configurations)
+    // Global definition of logger configs so that it's available for scope
+    // processor (SDK scope doesn't support passing configurations)
     @Inject
     ConfigsSingleton configs;
 
@@ -78,12 +93,13 @@ public class JsonloggerOperations {
      * Log a new entry
      */
     @Execution(ExecutionType.BLOCKING)
-    public void logger(@ParameterGroup(name = "Logger") @Expression(value = NOT_SUPPORTED) LoggerProcessor loggerProcessor,
-                       CorrelationInfo correlationInfo,
-                       ComponentLocation location,
-                       @Config JsonloggerConfiguration config,
-                       FlowListener flowListener,
-                       CompletionCallback<Void, Void> callback) {
+    public void logger(
+            @ParameterGroup(name = "Logger") @Expression(value = NOT_SUPPORTED) LoggerProcessor loggerProcessor,
+            CorrelationInfo correlationInfo,
+            ComponentLocation location,
+            @Config JsonloggerConfiguration config,
+            FlowListener flowListener,
+            CompletionCallback<Void, Void> callback) {
 
         Long initialTimestamp, loggerTimestamp;
         initialTimestamp = loggerTimestamp = System.currentTimeMillis();
@@ -97,13 +113,15 @@ public class JsonloggerOperations {
             // Add cache entry for initial timestamp based on unique EventId
             initialTimestamp = config.getCachedTimerTimestamp(correlationInfo.getCorrelationId(), initialTimestamp);
         } catch (Exception e) {
-            LOGGER.error("initialTimestamp could not be retrieved from the cache config. Defaulting to current System.currentTimeMillis()", e);
+            LOGGER.error(
+                    "initialTimestamp could not be retrieved from the cache config. Defaulting to current System.currentTimeMillis()",
+                    e);
         }
 
         // Calculate elapsed time based on cached initialTimestamp
         Long elapsed = loggerTimestamp - initialTimestamp;
 
-        //config.printTimersKeys();
+        // config.printTimersKeys();
         if (elapsed == 0) {
             LOGGER.debug("configuring flowListener....");
             flowListener.onComplete(new TimerRemoverRunnable(correlationInfo.getCorrelationId(), config));
@@ -116,11 +134,14 @@ public class JsonloggerOperations {
          */
         if (isLogEnabled(loggerProcessor.getPriority().toString())) {
             // Load disabledFields
-            List<String> disabledFields = (config.getJsonOutput().getDisabledFields() != null) ? Arrays.asList(config.getJsonOutput().getDisabledFields().split(",")) : new ArrayList<>();
+            List<String> disabledFields = (config.getJsonOutput().getDisabledFields() != null)
+                    ? Arrays.asList(config.getJsonOutput().getDisabledFields().split(","))
+                    : new ArrayList<>();
             LOGGER.debug("The following fields will be disabled for logging: " + disabledFields);
 
-            // Logic to disable fields and/or parse TypedValues as String for JSON log printing
-            //Map<String, String> typedValuesAsString = new HashMap<>();
+            // Logic to disable fields and/or parse TypedValues as String for JSON log
+            // printing
+            // Map<String, String> typedValuesAsString = new HashMap<>();
             Map<String, String> typedValuesAsString = new HashMap<>();
             Map<String, JsonNode> typedValuesAsJsonNode = new HashMap<>();
             try {
@@ -137,14 +158,18 @@ public class JsonloggerOperations {
                                 if (v instanceof ParameterResolver) {
                                     v = ((ParameterResolver) v).resolve();
                                 }
-                                if (v.getClass().getCanonicalName().equals("org.mule.runtime.api.metadata.TypedValue")) {
-                                    LOGGER.debug("org.mule.runtime.api.metadata.TypedValue type was found for field: " + k);
+                                if (v.getClass().getCanonicalName()
+                                        .equals("org.mule.runtime.api.metadata.TypedValue")) {
+                                    LOGGER.debug(
+                                            "org.mule.runtime.api.metadata.TypedValue type was found for field: " + k);
                                     TypedValue<InputStream> typedVal = (TypedValue<InputStream>) v;
                                     LOGGER.debug("Parsing TypedValue for field " + k);
 
                                     LOGGER.debug("TypedValue MediaType: " + typedVal.getDataType().getMediaType());
-                                    LOGGER.debug("TypedValue Type: " + typedVal.getDataType().getType().getCanonicalName());
-                                    LOGGER.debug("TypedValue Class: " + typedVal.getValue().getClass().getCanonicalName());
+                                    LOGGER.debug(
+                                            "TypedValue Type: " + typedVal.getDataType().getType().getCanonicalName());
+                                    LOGGER.debug(
+                                            "TypedValue Class: " + typedVal.getValue().getClass().getCanonicalName());
 
                                     // Remove unparsed field
                                     BeanUtils.setProperty(loggerProcessor, k, null);
@@ -154,23 +179,38 @@ public class JsonloggerOperations {
                                         // Should content type field be parsed as part of JSON log?
                                         if (config.getJsonOutput().isParseContentFieldsInJsonOutput()) {
                                             // Is content type application/json?
-                                            if (typedVal.getDataType().getMediaType().getPrimaryType().equals("application") && typedVal.getDataType().getMediaType().getSubType().equals("json")) {
+                                            if (typedVal.getDataType().getMediaType().getPrimaryType()
+                                                    .equals("application")
+                                                    && typedVal.getDataType().getMediaType().getSubType()
+                                                            .equals("json")) {
                                                 // Apply masking if needed
-                                                List<String> dataMaskingFields = (config.getJsonOutput().getContentFieldsDataMasking() != null) ? Arrays.asList(config.getJsonOutput().getContentFieldsDataMasking().split(",")) : new ArrayList<>();
-                                                LOGGER.debug("The following JSON keys/paths will be masked for logging: " + dataMaskingFields);
+                                                List<String> dataMaskingFields = (config.getJsonOutput()
+                                                        .getContentFieldsDataMasking() != null)
+                                                                ? Arrays.asList(config.getJsonOutput()
+                                                                        .getContentFieldsDataMasking().split(","))
+                                                                : new ArrayList<>();
+                                                LOGGER.debug(
+                                                        "The following JSON keys/paths will be masked for logging: "
+                                                                + dataMaskingFields);
                                                 if (!dataMaskingFields.isEmpty()) {
-                                                    JsonNode tempContentNode = om.getObjectMapper().readTree((InputStream)typedVal.getValue());
+                                                    JsonNode tempContentNode = om.getObjectMapper()
+                                                            .readTree((InputStream) typedVal.getValue());
                                                     JsonMasker masker = new JsonMasker(dataMaskingFields, true);
                                                     JsonNode masked = masker.mask(tempContentNode);
                                                     typedValuesAsJsonNode.put(k, masked);
                                                 } else {
-                                                    typedValuesAsJsonNode.put(k, om.getObjectMapper().readTree((InputStream)typedVal.getValue()));
+                                                    typedValuesAsJsonNode.put(k, om.getObjectMapper()
+                                                            .readTree((InputStream) typedVal.getValue()));
                                                 }
                                             } else {
-                                                typedValuesAsString.put(k, (String) transformationService.transform(typedVal.getValue(), typedVal.getDataType(), TEXT_STRING));
+                                                typedValuesAsString.put(k,
+                                                        (String) transformationService.transform(typedVal.getValue(),
+                                                                typedVal.getDataType(), TEXT_STRING));
                                             }
                                         } else {
-                                            typedValuesAsString.put(k, (String) transformationService.transform(typedVal.getValue(), typedVal.getDataType(), TEXT_STRING));
+                                            typedValuesAsString.put(k,
+                                                    (String) transformationService.transform(typedVal.getValue(),
+                                                            typedVal.getDataType(), TEXT_STRING));
                                         }
                                     }
                                 }
@@ -192,7 +232,8 @@ public class JsonloggerOperations {
             /**
              * Custom field ordering for Logger Operation
              * ==========================================
-             * This will take place after LoggerProcessor ordering which is defined by the field sequence in loggerProcessor.json
+             * This will take place after LoggerProcessor ordering which is defined by the
+             * field sequence in loggerProcessor.json
              **/
             // 1. Elapsed Time
             mergedLogger.put("elapsed", elapsed);
@@ -219,15 +260,21 @@ public class JsonloggerOperations {
             /** End field ordering **/
 
             /** Print Logger **/
-            String finalLog = printObjectToLog(mergedLogger, loggerProcessor.getPriority().toString(), config.getJsonOutput().isPrettyPrint());
+            String finalLog = printObjectToLog(mergedLogger, loggerProcessor.getPriority().toString(),
+                    config.getJsonOutput().isPrettyPrint());
 
             /** Forward Log to External Destination **/
             if (config.getExternalDestination() != null) {
-                LOGGER.debug("config.getExternalDestination().getSupportedCategories().isEmpty(): " + config.getExternalDestination().getSupportedCategories().isEmpty());
-                LOGGER.debug("config.getExternalDestination().getSupportedCategories().contains(jsonLogger.getName()): " + config.getExternalDestination().getSupportedCategories().contains(jsonLogger.getName()));
-                if (configs.getConfig(config.getConfigName()).getExternalDestination().getSupportedCategories().isEmpty() || config.getExternalDestination().getSupportedCategories().contains(jsonLogger.getName())) {
+                LOGGER.debug("config.getExternalDestination().getSupportedCategories().isEmpty(): "
+                        + config.getExternalDestination().getSupportedCategories().isEmpty());
+                LOGGER.debug("config.getExternalDestination().getSupportedCategories().contains(jsonLogger.getName()): "
+                        + config.getExternalDestination().getSupportedCategories().contains(jsonLogger.getName()));
+                if (configs.getConfig(config.getConfigName()).getExternalDestination().getSupportedCategories()
+                        .isEmpty()
+                        || config.getExternalDestination().getSupportedCategories().contains(jsonLogger.getName())) {
                     LOGGER.debug(jsonLogger.getName() + " is a supported category for external destination");
-                    logEvent.publishToExternalDestination(correlationInfo.getEventId(), finalLog, config.getConfigName());
+                    logEvent.publishToExternalDestination(correlationInfo.getEventId(), finalLog,
+                            config.getConfigName());
                 }
             }
         } else {
@@ -241,23 +288,24 @@ public class JsonloggerOperations {
      */
     @Execution(ExecutionType.BLOCKING)
     @MediaType("application/json")
-    public void loggerScope(@DisplayName("Module configuration") @Example("JSON_Logger_Config") @Summary("Indicate which Global config should be associated with this Scope.") String configurationRef,
-                            @Optional(defaultValue="INFO") Priority priority,
-                            @Optional(defaultValue="OUTBOUND_REQUEST_SCOPE") ScopeTracePoint scopeTracePoint,
-                            @Optional @Summary("If not set, by default will log to the org.mule.extension.jsonlogger.JsonLogger category") String category,
-                            @Optional(defaultValue="#[correlationId]") @Placement(tab = "Advanced") String correlationId,
-                            ComponentLocation location,
-                            CorrelationInfo correlationInfo,
-                            FlowListener flowListener,
-                            Chain operations,
-                            CompletionCallback<Object, Object> callback) {
+    public void loggerScope(
+            @DisplayName("Module configuration") @Example("JSON_Logger_Config") @Summary("Indicate which Global config should be associated with this Scope.") String configurationRef,
+            @Optional(defaultValue = "INFO") Priority priority,
+            @Optional(defaultValue = "OUTBOUND_REQUEST_SCOPE") ScopeTracePoint scopeTracePoint,
+            @Optional @Summary("If not set, by default will log to the org.mule.extension.jsonlogger.JsonLogger category") String category,
+            @Optional(defaultValue = "#[correlationId]") @Placement(tab = "Advanced") String correlationId,
+            ComponentLocation location,
+            CorrelationInfo correlationInfo,
+            FlowListener flowListener,
+            Chain operations,
+            CompletionCallback<Object, Object> callback) {
 
         /**
          * BEFORE scope logger
          * ===================
          **/
 
-        Long initialTimestamp,loggerTimestamp;
+        Long initialTimestamp, loggerTimestamp;
         initialTimestamp = loggerTimestamp = System.currentTimeMillis();
 
         initLoggerCategory(category);
@@ -267,18 +315,22 @@ public class JsonloggerOperations {
 
         try {
             // Add cache entry for initial timestamp based on unique EventId
-            initialTimestamp = configs.getConfig(configurationRef).getCachedTimerTimestamp(correlationInfo.getCorrelationId(), initialTimestamp);
+            initialTimestamp = configs.getConfig(configurationRef)
+                    .getCachedTimerTimestamp(correlationInfo.getCorrelationId(), initialTimestamp);
         } catch (Exception e) {
-            LOGGER.error("initialTimestamp could not be retrieved from the cache config. Defaulting to current System.currentTimeMillis()", e);
+            LOGGER.error(
+                    "initialTimestamp could not be retrieved from the cache config. Defaulting to current System.currentTimeMillis()",
+                    e);
         }
 
         // Calculate elapsed time based on cached initialTimestamp
         Long elapsed = loggerTimestamp - initialTimestamp;
 
-        //config.printTimersKeys();
+        // config.printTimersKeys();
         if (elapsed == 0) {
             LOGGER.debug("configuring flowListener....");
-            flowListener.onComplete(new TimerRemoverRunnable(correlationInfo.getCorrelationId(), configs.getConfig(configurationRef)));
+            flowListener.onComplete(
+                    new TimerRemoverRunnable(correlationInfo.getCorrelationId(), configs.getConfig(configurationRef)));
         } else {
             LOGGER.debug("flowListener already configured");
         }
@@ -304,14 +356,18 @@ public class JsonloggerOperations {
                 loggerProcessor.putPOJO("locationInfo", locationInfoMap);
             }
             loggerProcessor.put("timestamp", getFormattedTimestamp(loggerTimestamp));
-            loggerProcessor.put("applicationName", configs.getConfig(configurationRef).getGlobalSettings().getApplicationName());
-            loggerProcessor.put("applicationVersion", configs.getConfig(configurationRef).getGlobalSettings().getApplicationVersion());
-            loggerProcessor.put("environment", configs.getConfig(configurationRef).getGlobalSettings().getEnvironment());
+            loggerProcessor.put("applicationName",
+                    configs.getConfig(configurationRef).getGlobalSettings().getApplicationName());
+            loggerProcessor.put("applicationVersion",
+                    configs.getConfig(configurationRef).getGlobalSettings().getApplicationVersion());
+            loggerProcessor.put("environment",
+                    configs.getConfig(configurationRef).getGlobalSettings().getEnvironment());
             loggerProcessor.put("threadName", Thread.currentThread().getName());
 
             // Define JSON output formatting
             // Print Logger
-            String finalLogBefore = printObjectToLog(loggerProcessor, priority.toString(), configs.getConfig(configurationRef).getJsonOutput().isPrettyPrint());
+            String finalLogBefore = printObjectToLog(loggerProcessor, priority.toString(),
+                    configs.getConfig(configurationRef).getJsonOutput().isPrettyPrint());
 
             // Added temp variable to comply with lambda
             Long finalInitialTimestamp = initialTimestamp;
@@ -336,7 +392,8 @@ public class JsonloggerOperations {
                         loggerProcessor.put("timestamp", getFormattedTimestamp(endScopeTimestamp));
 
                         // Print Logger
-                        String finalLogAfter = printObjectToLog(loggerProcessor, priority.toString(), configs.getConfig(configurationRef).getJsonOutput().isPrettyPrint());
+                        String finalLogAfter = printObjectToLog(loggerProcessor, priority.toString(),
+                                configs.getConfig(configurationRef).getJsonOutput().isPrettyPrint());
 
                         /** Forward Log to External Destination **/
                         if (configs.getConfig(configurationRef).getExternalDestination() != null) {
@@ -363,7 +420,8 @@ public class JsonloggerOperations {
                         loggerProcessor.put("timestamp", getFormattedTimestamp(errorScopeTimestamp));
 
                         // Print Logger
-                        String finalLogError = printObjectToLog(loggerProcessor, "ERROR", configs.getConfig(configurationRef).getJsonOutput().isPrettyPrint());
+                        String finalLogError = printObjectToLog(loggerProcessor, "ERROR",
+                                configs.getConfig(configurationRef).getJsonOutput().isPrettyPrint());
 
                         /** Forward Log to External Destination **/
                         if (configs.getConfig(configurationRef).getExternalDestination() != null) {
@@ -385,10 +443,97 @@ public class JsonloggerOperations {
         }
     }
 
-    private void publishScopeLogEvents(String configurationRef, String correlationId, String finalLogBefore, String finalLogAfter) {
-        LOGGER.debug("externalDestination.getDestination().getSupportedCategories().isEmpty(): " + configs.getConfig(configurationRef).getExternalDestination().getSupportedCategories().isEmpty());
-        LOGGER.debug("externalDestination.getDestination().getSupportedCategories().contains(jsonLogger.getName()): " + configs.getConfig(configurationRef).getExternalDestination().getSupportedCategories().contains(jsonLogger.getName()));
-        if (configs.getConfig(configurationRef).getExternalDestination().getSupportedCategories().isEmpty() || configs.getConfig(configurationRef).getExternalDestination().getSupportedCategories().contains(jsonLogger.getName())) {
+    /**
+     * span main scope
+     */
+    @Execution(ExecutionType.BLOCKING)
+    @MediaType("application/json")
+    public void spanMainScope(
+            @DisplayName("Module configuration") @Example("JSON_Logger_Config") @Summary("Indicate which Global config should be associated with this Scope.") String configurationRef,
+            @Optional(defaultValue = "INFO") Priority priority,
+            @Optional(defaultValue = "OUTBOUND_REQUEST_SCOPE") ScopeTracePoint scopeTracePoint,
+            @Optional @Summary("If not set, by default will log to the org.mule.extension.jsonlogger.JsonLogger category") String category,
+            @Optional(defaultValue = "#[correlationId]") @Placement(tab = "Advanced") String correlationId,
+            ComponentLocation location,
+            CorrelationInfo correlationInfo,
+            FlowListener flowListener,
+            Chain operations,
+            CompletionCallback<Object, Object> callback) {
+
+        String applicationName = configs.getConfig(configurationRef).getGlobalSettings().getApplicationName();
+
+        LOGGER.info("Iniciando o Span:" + applicationName + " " + correlationId);
+
+        OpenTelemetry openTelemetry = OpenTelemetryConfiguration.initOpenTelemetry();
+        Tracer tracer = openTelemetry.getTracer(correlationId);
+        Meter meter = openTelemetry.getMeter(correlationId);
+        LongHistogram histogram = meter.histogramBuilder("super_timer").ofLongs().setUnit("ms").build();
+
+        long startTime = System.currentTimeMillis();
+        Span exampleSpan = tracer.spanBuilder("exampleSpan").startSpan();
+        Context exampleContext = Context.current().with(exampleSpan);
+
+        exampleSpan.setAttribute("correlationId", correlationId);
+
+        operations.process(
+                result -> {
+                    LOGGER.info(
+                            "Finalizando o Span Pai: " + applicationName + " " + correlationId + " Com Sucesso!!!!!!!");
+                    histogram.record(
+                            System.currentTimeMillis() - startTime, Attributes.empty(), exampleContext);
+                    exampleSpan.end();
+                },
+                (error, previous) -> {
+                    LOGGER.info(
+                            "Finalizando o Span Pai: " + applicationName + " " + correlationId + " Com ERRO@@@@@@@@@@");
+                    histogram.record(
+                            System.currentTimeMillis() - startTime, Attributes.empty(), exampleContext);
+                    exampleSpan.end();
+                });
+    }
+
+    /**
+     * span child scope
+     */
+    @Execution(ExecutionType.BLOCKING)
+    @MediaType("application/json")
+    public void spanChildScope(
+            @DisplayName("Module configuration") @Example("JSON_Logger_Config") @Summary("Indicate which Global config should be associated with this Scope.") String configurationRef,
+            @Optional(defaultValue = "INFO") Priority priority,
+            @Optional(defaultValue = "OUTBOUND_REQUEST_SCOPE") ScopeTracePoint scopeTracePoint,
+            @Optional @Summary("If not set, by default will log to the org.mule.extension.jsonlogger.JsonLogger category") String category,
+            @Optional(defaultValue = "#[correlationId]") @Placement(tab = "Advanced") String correlationId,
+            ComponentLocation location,
+            CorrelationInfo correlationInfo,
+            FlowListener flowListener,
+            Chain operations,
+            CompletionCallback<Object, Object> callback) {
+
+        String applicationName = configs.getConfig(configurationRef).getGlobalSettings().getApplicationName();
+
+        LOGGER.info("Iniciando o Span:" + applicationName + " " + correlationId);
+
+        operations.process(
+                result -> {
+                    LOGGER.info("Finalizando o Span Filho: " + applicationName + " " + correlationId
+                            + " Com Sucesso!!!!!!!");
+                },
+                (error, previous) -> {
+                    LOGGER.info("Finalizando o Span Filho: " + applicationName + " " + correlationId
+                            + " Com ERRO@@@@@@@@@@");
+                });
+    }
+
+    private void publishScopeLogEvents(String configurationRef, String correlationId, String finalLogBefore,
+            String finalLogAfter) {
+        LOGGER.debug("externalDestination.getDestination().getSupportedCategories().isEmpty(): "
+                + configs.getConfig(configurationRef).getExternalDestination().getSupportedCategories().isEmpty());
+        LOGGER.debug("externalDestination.getDestination().getSupportedCategories().contains(jsonLogger.getName()): "
+                + configs.getConfig(configurationRef).getExternalDestination().getSupportedCategories()
+                        .contains(jsonLogger.getName()));
+        if (configs.getConfig(configurationRef).getExternalDestination().getSupportedCategories().isEmpty()
+                || configs.getConfig(configurationRef).getExternalDestination().getSupportedCategories()
+                        .contains(jsonLogger.getName())) {
             LOGGER.debug(jsonLogger.getName() + " is a supported category for external destination");
             // Publishing before and after logEvents for better efficiency
             logEvent.publishToExternalDestination(correlationId, finalLogBefore, configurationRef);
@@ -398,7 +543,7 @@ public class JsonloggerOperations {
 
     private Map<String, String> locationInfoToMap(ComponentLocation location) {
         Map<String, String> locationInfo = new HashMap<String, String>();
-        //locationInfo.put("location", location.getLocation());
+        // locationInfo.put("location", location.getLocation());
         locationInfo.put("rootContainer", location.getRootContainerName());
         locationInfo.put("component", location.getComponentIdentifier().getIdentifier().toString());
         locationInfo.put("fileName", location.getFileName().orElse(""));
@@ -407,21 +552,26 @@ public class JsonloggerOperations {
     }
 
     private String getFormattedTimestamp(Long loggerTimestamp) {
-    /*
-        Define timestamp:
-        - DateTime: Defaults to ISO format
-        - TimeZone: Defaults to UTC. Refer to https://en.wikipedia.org/wiki/List_of_tz_database_time_zones for valid timezones
-    */
-        DateTime dateTime = new DateTime(loggerTimestamp).withZone(org.joda.time.DateTimeZone.forID(System.getProperty("json.logger.timezone", "UTC")));
+        /*
+         * Define timestamp:
+         * - DateTime: Defaults to ISO format
+         * - TimeZone: Defaults to UTC. Refer to
+         * https://en.wikipedia.org/wiki/List_of_tz_database_time_zones for valid
+         * timezones
+         */
+        DateTime dateTime = new DateTime(loggerTimestamp)
+                .withZone(org.joda.time.DateTimeZone.forID(System.getProperty("json.logger.timezone", "UTC")));
         String timestamp = dateTime.toString();
-        if (System.getProperty("json.logger.dateformat") != null && !System.getProperty("json.logger.dateformat").equals("")) {
+        if (System.getProperty("json.logger.dateformat") != null
+                && !System.getProperty("json.logger.dateformat").equals("")) {
             timestamp = dateTime.toString(System.getProperty("json.logger.dateformat"));
         }
         return timestamp;
     }
 
     private String printObjectToLog(ObjectNode loggerObj, String priority, boolean isPrettyPrint) {
-        ObjectWriter ow = (isPrettyPrint) ? om.getObjectMapper().writer().withDefaultPrettyPrinter() : om.getObjectMapper().writer();
+        ObjectWriter ow = (isPrettyPrint) ? om.getObjectMapper().writer().withDefaultPrettyPrinter()
+                : om.getObjectMapper().writer();
         String logLine = "";
         try {
             logLine = ow.writeValueAsString(loggerObj);
@@ -477,7 +627,6 @@ public class JsonloggerOperations {
         }
         LOGGER.debug("category set: " + jsonLogger.getName());
     }
-
     // Allows executing timer cleanup on flowListener onComplete events
     private static class TimerRemoverRunnable implements Runnable {
 
